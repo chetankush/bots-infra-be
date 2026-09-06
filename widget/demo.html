@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Northside Motors — widget demo</title>
+  <style>
+    body{font:16px/1.65 -apple-system,system-ui,sans-serif;margin:0;color:#16181d;background:#fff}
+    header{padding:70px 24px;background:#101418;color:#fff}
+    header h1{margin:0 0 8px;font-size:36px} header p{margin:0;opacity:.75}
+    main{max-width:720px;margin:0 auto;padding:40px 24px 140px}
+    code{background:#f2f4f7;padding:2px 6px;border-radius:4px;font-size:14px}
+    .box{border:1px solid #e6e8ec;border-radius:10px;padding:16px;margin:24px 0;background:#fafbfc}
+    .err{color:#b42318}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Northside Motors</h1>
+    <p>Service, test drives, and parts. Open Mon–Sat.</p>
+  </header>
+  <main>
+    <h2>Widget demo</h2>
+    <p>This page stands in for a client's website. The bubble in the bottom-right is the
+       embedded assistant — same engine, loaded the way a real client would load it.</p>
+    <div class="box">
+      <strong>Embed snippet</strong>
+      <p style="margin:8px 0 0"><code>&lt;script src="…/widget.js" data-key="pk_…" async&gt;&lt;/script&gt;</code></p>
+      <p id="status" style="margin:10px 0 0">loading demo tenant…</p>
+    </div>
+    <p>The widget uses Shadow DOM, so this page's CSS cannot affect it and its CSS cannot
+       affect this page. It is 5.7&nbsp;kB and pulls in no framework.</p>
+  </main>
+
+  <script>
+    // Auto-load the seeded demo tenant so there's no key to paste by hand.
+    (async () => {
+      const status = document.getElementById("status");
+      try {
+        const res = await fetch("/v1/admin/demo-key");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const { public_key, name } = await res.json();
+        status.textContent = `Loaded ${name} — key ${public_key.slice(0, 12)}…`;
+        const s = document.createElement("script");
+        s.src = "/widget.js";
+        s.async = true;
+        s.dataset.key = public_key;
+        s.dataset.api = location.origin;
+        s.dataset.accent = "#0F62FE";
+        document.body.appendChild(s);
+      } catch (e) {
+        status.className = "err";
+        status.textContent = "Could not load a demo tenant — run scripts/seed.py first. (" + e.message + ")";
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: engine
+          POSTGRES_PASSWORD: engine
+          POSTGRES_DB: engine
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U engine" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://engine:engine@localhost:5432/engine
+      CREDENTIAL_ENCRYPTION_KEY: hn1Xr0kQ9eJ3vZ2sT8yU4wA6bC5dE7fG0hI2jK3lM4o=  # dummy, CI only
+      ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev]"
+      - name: lint
+        run: |
+          . .venv/bin/activate
+          ruff check app tests
+          ruff format --check app tests
+      - name: unit tests
+        run: |
+          . .venv/bin/activate
+          pytest tests/ -q
+
+  # The release gate. Config or graph changes must not silently degrade a live client.
+  # Runs against EVERY tenant - a shared-graph change is the dangerous kind.
+  evals:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: engine
+          POSTGRES_PASSWORD: engine
+          POSTGRES_DB: engine
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U engine" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://engine:engine@localhost:5432/engine
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
+      ENV: test          # forces mocked tools - evals never touch a client's calendar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev]"
+      - name: seed
+        run: |
+          . .venv/bin/activate
+          python scripts/seed.py
+          python scripts/seed_evals.py northside-motors
+      - name: eval gate (fails the PR on regression)
+        run: |
+          . .venv/bin/activate
+          python -m app.evals.runner northside-motors

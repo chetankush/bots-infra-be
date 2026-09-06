@@ -1,0 +1,81 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: engine
+      POSTGRES_PASSWORD: engine
+      POSTGRES_DB: engine
+    ports: ["5455:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engine"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://engine:engine@db:5432/engine
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+    volumes:
+      - ./app:/srv/app
+      - fastembed_cache:/srv/.fastembed_cache
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Ingestion runs as its own container with a CPU quota so crawling/embedding
+  # never starves request serving. See README.
+  ingest:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://engine:engine@db:5432/engine
+      ROLE: ingest
+    depends_on:
+      db: {condition: service_healthy}
+    volumes:
+      - ./app:/srv/app
+      - fastembed_cache:/srv/.fastembed_cache
+    deploy:
+      resources:
+        limits: {cpus: "1.0"}
+    command: python -m app.rag.worker
+
+  # Real BI on top of the same Postgres: client-facing dashboards without
+  # building a reporting UI. Free and self-hosted. Start it only when needed:
+  #   docker compose --profile bi up -d metabase   ->  http://localhost:3002
+  metabase:
+    image: metabase/metabase:latest
+    profiles: ["bi"]
+    ports: ["3002:3000"]
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: engine
+      MB_DB_PORT: 5432
+      MB_DB_USER: engine
+      MB_DB_PASS: engine
+      MB_DB_HOST: db
+    depends_on:
+      db: {condition: service_healthy}
+    volumes: ["metabase_data:/metabase-data"]
+
+  # S3-compatible object storage for local development of the backup path.
+  # No cloud account needed; point BACKUP_ENDPOINT_URL at Oracle/R2/S3 in prod.
+  #   docker compose --profile storage up -d minio  ->  http://localhost:9001
+  minio:
+    image: minio/minio:latest
+    profiles: ["storage"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: engineadmin
+      MINIO_ROOT_PASSWORD: enginesecret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio_data:/data"]
+
+volumes:
+  pgdata:
+  fastembed_cache:
+  metabase_data:
+  minio_data:

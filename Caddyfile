@@ -1,0 +1,7 @@
+# Oracle box reverse proxy. Cloudflare sits in front of this.
+api.firstvoid.com {
+	encode gzip
+	reverse_proxy localhost:8000 {
+		flush_interval -1   # required: never buffer SSE
+	}
+}
