@@ -78,6 +78,8 @@ than a model call, which removes ~800ms and a charge from every turn.
 ## Evaluation as a release gate
 
 The differentiator, and the reason this is infrastructure rather than a demo.
+`app/evals` is a self-contained harness: a golden dataset per tenant, an LLM-judge graph,
+runs persisted in Postgres, and a CI job that fails the PR on regression.
 
 A tenant's golden set is replayed through the **real graph with mocked tools**, each reply
 judged on correctness, grounding, scope adherence and prohibition safety. CI fails the PR
@@ -124,12 +126,28 @@ should be.
 
 ## Stack
 
-**Python 3.12** · FastAPI · **LangGraph** · LangChain · OpenRouter (per-tenant model choice
-with provider fallback) · **PostgreSQL + pgvector** · **fastembed** (local ONNX,
-Hugging Face `bge-small-en-v1.5`) · boto3 → S3-compatible storage · Docker Compose · Caddy
+| Layer | Choice |
+|---|---|
+| Agent orchestration | **LangGraph** — typed state with reducers, parallel fan-out, conditional routing |
+| LLM abstraction | **LangChain** (`langchain-core`, `langchain-openai`) |
+| Model gateway | **OpenRouter** — per-tenant model choice, provider fallback, prompt caching |
+| **Evaluation** | **Custom harness** (`app/evals`) — LLM-judge graph, golden datasets and runs in Postgres, CI gate |
+| Embeddings | **fastembed** (ONNX) + Hugging Face `bge-small-en-v1.5` — local, $0/token, no PyTorch |
+| API | **FastAPI** + Uvicorn, Pydantic v2 |
+| Data | **PostgreSQL + pgvector** (HNSW), SQLAlchemy 2.0 async, Alembic |
+| Storage | **boto3** → S3-compatible (AWS S3 / Oracle / R2 / MinIO) |
+| Frontend | Vanilla **TypeScript** + Shadow DOM widget (8 KB), zero-build ops console |
+| Infra | Docker Compose · Caddy · GitHub Actions |
+| Quality | pytest · ruff · mypy |
 
 One datastore does vectors, queue and relational. **No Redis, no Celery, no hosted vector
 database** — Postgres holds all three until there is evidence it cannot.
+
+The eval harness is deliberately custom rather than `ragas`. The metric that matters most
+here — *prohibition safety*, did the agent do something this tenant contractually promised
+it would never do — is not a generic RAG metric, and the judge has to grade against a
+per-tenant rule list. It is ~340 lines and depends on nothing beyond what the app already
+uses.
 
 ---
 
