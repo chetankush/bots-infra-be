@@ -45,10 +45,6 @@ class Settings(BaseSettings):
     backup_secret_key: str = ""
     backup_retain_days: int = 30
 
-    langfuse_public_key: str = ""
-    langfuse_secret_key: str = ""
-    langfuse_host: str = ""
-
     # A hard switch, independent of ENV. The environment variable alone is not a
     # safe gate for "may this write to a client's real calendar": an eval replaying
     # thousands of conversations in a production environment would book every one of

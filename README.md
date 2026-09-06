@@ -1,29 +1,181 @@
-# bots-infra-be
+![Tests](https://img.shields.io/badge/Tests-105%20passing-brightgreen)
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![LangGraph](https://img.shields.io/badge/LangGraph-agent%20runtime-orange)
+![Postgres](https://img.shields.io/badge/Postgres-pgvector-informational)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-**A multi-tenant runtime for production AI agents.** One LangGraph agent, many clients —
-adding a customer is a database row, not a fork of the codebase.
+# Multi-Tenant AI Agent Runtime (bots-infra-be)
 
-Built to serve real chatbots for an agency's clients across web chat and WhatsApp, with
-the parts that usually get skipped: guardrails that are enforced structurally, per-tenant
-cost ceilings, data-retention that actually deletes, and an evaluation gate that blocks a
-release when quality regresses.
+Backend that serves production AI chatbots for many clients from one LangGraph agent.
+Adding a customer is a database row, not a fork of the codebase.
+
+Built for an agency running client bots across web chat and WhatsApp, with the parts that
+usually get skipped: guardrails enforced structurally, per-tenant cost ceilings, real
+data-retention, and an evaluation gate that blocks a release when quality regresses.
+
+## Getting Started
+
+1. **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/chetankush/bots-infra-be.git
+    cd bots-infra-be
+    ```
+
+2. **Run everything with one command:**
+
+    ```bash
+    ./run.sh
+    ```
+
+    This creates `.env`, installs dependencies, starts Postgres, applies the schema,
+    seeds a demo tenant, builds the widget, and starts the server.
+
+3. **To run tests:**
+
+    ```bash
+    pytest -q
+    ```
+
+4. **To see the coverage:**
+
+    ```bash
+    pytest --cov=app --cov-report=term-missing
+    ```
+
+**step by step instructions**
+
+### Prerequisites
+
+- Install **Python 3.12** (or `uv`, which will fetch it for you).
+- Install **Docker** on your system — used for Postgres with pgvector.
+- Install **Node.js** (only needed to rebuild the chat widget).
+- Get an **OpenRouter API key** from [openrouter.ai](https://openrouter.ai) — the single
+  gateway for every model the agent uses.
+
+### Set up the environment
+
+1. **Copy the template:**
+
+    ```bash
+    cp .env.example .env
+    ```
+
+2. **Generate an encryption key** (this encrypts each client's integration
+   credentials at rest):
+
+    ```bash
+    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    ```
+
+3. **Fill in `.env`:** set `FV_OPENROUTER_API_KEY`, paste the key above into
+   `CREDENTIAL_ENCRYPTION_KEY`, and change `ADMIN_API_KEY`.
+
+### Install Postgres on Docker
+
+The database needs the `pgvector` extension, so the compose file uses the
+`pgvector/pgvector:pg16` image rather than plain Postgres.
+
+```bash
+docker compose up -d db
+```
+
+To open a psql shell against it:
+
+```bash
+docker compose exec db psql -U engine -d engine
+```
+
+### Install dependencies and create the schema
+
+```bash
+uv venv --python 3.12
+uv pip install -e ".[dev]"
+python scripts/seed.py          # extension, tables, and one demo tenant
+```
+
+`seed.py` prints a `public_key` — the token a client's website uses to load its widget.
+
+## To Run the Project
+
+Use this command:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+| URL | What it is |
+|---|---|
+| `http://localhost:8000/console` | Ops console — onboard clients, crawl sites, chat, inspect traces, leads, usage |
+| `http://localhost:8000/demo` | The embeddable widget on a stand-in client site |
+| `http://localhost:8000/docs` | OpenAPI reference |
+| `http://localhost:8000/healthz` | Health check |
+
+**Give the agent something to answer from:**
+
+```bash
+python scripts/crawl.py <tenant_key> https://your-client-site.com 25
+```
+
+**Talk to it from the terminal:**
+
+```bash
+python scripts/chat.py <public_key>
+```
+
+**Embed it on a client's site:**
+
+```html
+<script src="https://cdn.example.com/widget.js" data-key="pk_..." async></script>
+```
+
+**Optional services:**
+
+```bash
+docker compose --profile bi up -d metabase       # BI at :3002
+docker compose --profile storage up -d minio     # local S3 for backups at :9001
+```
+
+## To Run tests
+
+Run these commands in the root directory →
+
+```bash
+pytest -q
+```
+
+To see coverage →
+
+```bash
+pytest --cov=app --cov-report=term-missing
+```
+
+All 105 tests run **offline** — no cloud account and no network. Google Calendar,
+Twilio and Resend are exercised against local fakes that speak the real wire protocols,
+including the failures that actually matter (Google answering `HTTP 200` with a
+per-calendar `errors` array, which silently double-books a day if mishandled).
+
+**To run the evaluation gate** (this one does call the model, so it costs money):
+
+```bash
+python -m app.evals.runner <tenant_key>
+python -m app.evals.runner <tenant_key> --model google/gemini-2.5-flash-lite
+```
+
+## Architecture
+
+Every channel collapses into one envelope, so the graph never knows what it is serving.
+Adding a channel is an adapter plus a config profile — never a second agent.
 
 ```
                     ┌──────────────┐
    web widget ─────►│              │
    WhatsApp   ─────►│   Envelope   │──►  guard_in ─┐
    SMS        ─────►│ (normalised) │      retrieve ─┴──► agent ⇄ tools ──► guard_out ──► reply
-   voice*     ─────►│              │                        │
-                    └──────────────┘                        └── calendar · leads · handoff
-                                                                 (each with a mock twin)
+                    │              │                       │
+                    └──────────────┘                       └── calendar · leads · handoff
+                                                                (each with a mock twin)
 ```
-
-Every channel collapses to one envelope, so the graph never knows what it is serving.
-Adding a channel is an adapter plus a config profile — never a second agent.
-
----
-
-## The idea that holds it together
 
 Behaviour is **configuration resolved at request time**, not code:
 
@@ -33,152 +185,95 @@ platform defaults → vertical pack → tenant → location → channel profile
 
 Layers deep-merge and validate into one `AgentConfig`. A dealership's "never quote
 financing" rule and a clinic's intake fields are the same mechanism with different rows.
-Onboarding a client is an `INSERT` and a site crawl.
+The same tenant renders 1200 characters with markdown on web and 220 plain-text
+characters on voice — from one config, with identical guardrails.
 
-The same tenant renders differently per channel from one config: 1200 characters with
-markdown on web, 220 plain-text characters on voice — with identical guardrails.
+### Decisions worth defending
 
----
+- **Guardrails are graph nodes, not prompt text.** A rule written only into a prompt gets
+  argued around; a check node does not. When the guard model itself fails, the turn is
+  recorded as `guard_out:unverified` rather than passing silently.
+- **Replies are held until cleared.** Streaming live would show a prohibited answer for
+  ~1.4s before retracting it. Streaming is opt-in per tenant.
+- **Tenant isolation is injected, not remembered.** Every query goes through a
+  `TenantScope` that adds the predicate and raises on cross-tenant reads.
+- **Idempotency lives in the database.** Reminders are `UNIQUE(appointment_id, rule_key)`;
+  inbound Twilio messages are `UNIQUE(provider, provider_sid)`. Twilio's signature carries
+  no timestamp, so a captured webhook stays replayable forever — signature validity alone
+  cannot stop it.
+- **Business records outlive transcripts.** Leads and appointments originally cascaded
+  from conversations, so the retention job would have deleted every client's pipeline the
+  first time it ran. They are `SET NULL` now, with a test that fails if anyone reverts it.
+- **Everything that spends is bounded.** Per-tenant token budgets, three-tier rate
+  limiting, capped batch loops, and terminal job states a sweep can never resurrect.
 
-## Engineering decisions worth defending
+### Evaluation as a release gate
 
-**Guardrails are nodes, not prompt text.** `guard_in` classifies the incoming message;
-`guard_out` inspects the draft reply against the tenant's prohibition list. A rule written
-only into a prompt gets argued around; a check node does not. When a guard model itself
-fails, the turn is recorded as `guard_out:unverified` rather than passing silently —
-because a check that did not run is not a check that passed.
-
-**Replies are held until they are cleared.** Streaming tokens live would show the visitor
-a prohibited answer for ~1.4s before retracting it. Tenants with prohibitions get the
-plain JSON path; streaming is opt-in per tenant.
-
-**Tenant isolation is injected, not remembered.** Every query goes through a `TenantScope`
-that adds the predicate and raises on a cross-tenant read. One forgotten `WHERE` clause is
-the failure that ends an agency.
-
-**Idempotency lives in the database.** Reminders are `UNIQUE(appointment_id, rule_key)`;
-inbound Twilio messages are `UNIQUE(provider, provider_sid)`. Two workers racing are
-*physically unable* to double-send. Twilio's signature carries no timestamp, so a captured
-webhook stays replayable forever — signature validity alone cannot stop it.
-
-**Business records outlive transcripts.** Leads and appointments originally cascaded from
-conversations, so the advertised retention job would have deleted every client's pipeline
-the first time it ran. They are `SET NULL` now, with a test that fails if anyone reverts it.
-
-**Cost is the only unbounded axis, so everything that spends is bounded.** Per-tenant token
-budgets with graceful degrade, three-tier rate limiting (session / IP / tenant), capped
-batch loops, and terminal job states that a sweep can never resurrect.
-
-**Cheap where it is free to be cheap.** Embeddings run locally through ONNX — no PyTorch,
-no per-token cost, and no cloud dependency. Language detection is stopword-based rather
-than a model call, which removes ~800ms and a charge from every turn.
-
----
-
-## Evaluation as a release gate
-
-The differentiator, and the reason this is infrastructure rather than a demo.
 `app/evals` is a self-contained harness: a golden dataset per tenant, an LLM-judge graph,
-runs persisted in Postgres, and a CI job that fails the PR on regression.
+runs persisted in Postgres, and a CI job that fails the PR on regression. A tenant's
+golden set is replayed through the **real graph with tools force-mocked**, then judged on
+correctness, grounding, scope adherence and prohibition safety.
 
-A tenant's golden set is replayed through the **real graph with mocked tools**, each reply
-judged on correctness, grounding, scope adherence and prohibition safety. CI fails the PR
-when a metric regresses.
-
-Two rules the runner enforces, both learned the hard way:
-
-- **Tools are force-mocked regardless of environment.** An eval replaying thousands of
-  conversations in a production environment would otherwise book real appointments on real
-  customers' calendars.
-- **A failed judge is not a zero score.** Judge errors are excluded from the metrics and
-  reported separately; above a 10% error rate the run fails outright. Without this, a flaky
-  judge call reads as a safety violation and the gate lies in both directions.
-
-Because the model is config, "is the cheaper model good enough for *this* client?" becomes
-a measurement:
+Because the model is configuration, "is the cheaper model good enough for *this* client?"
+becomes a measurement:
 
 | answer model | correctness | grounded | scope | prohibition-safe | verdict |
 |---|---|---|---|---|---|
 | `claude-haiku-4.5` | 0.917 | 0.933 | 0.992 | 1.000 | pass |
 | `gemini-2.5-flash-lite` | 0.754 | 0.941 | 0.855 | 1.000 | pass, scope at the gate |
 
----
-
-## Measured
+### Measured
 
 | | |
 |---|---|
 | Blocked turn | **~1.1s** — `guard_in` short-circuits; no retrieval, no answer model |
-| Normal turn | **~2.9–3.6s** — `guard_in` ∥ `retrieve`, then agent, then `guard_out` |
+| Normal turn | **~2.9–3.6s** |
 | Retrieval | 5ms, concurrent with the guard |
-| Cost per conversation | **~$0.004** measured |
+| Cost per conversation | **~$0.004** |
 | Widget | 8 KB, Shadow DOM, zero framework |
 
-Fanning `guard_in` and `retrieve` out in parallel and skipping `guard_out` on
-already-refused turns cut blocked-turn latency by 85%.
+## Built With
 
-One trap worth naming: `cache_control` must sit **inside a content block**. Put it in a
-message's `additional_kwargs` and `langchain-openai` drops it silently — the request still
-succeeds, nothing caches, and the only symptom is a bill several times larger than it
-should be.
+* **LangGraph** — the agent runtime: typed state with reducers, parallel fan-out, conditional routing.
+* **LangChain** (`langchain-core`, `langchain-openai`) — model abstraction and message types.
+* **OpenRouter** — one gateway for every provider, with per-tenant model choice and automatic fallback.
+* **FastAPI** — async API layer, with SSE for streaming responses.
+* **PostgreSQL + pgvector** — one datastore for vectors, job queue and relational data. No Redis, no Celery, no hosted vector database.
+* **SQLAlchemy 2.0 (async) + Alembic** — ORM and migrations.
+* **fastembed** — local ONNX embeddings (Hugging Face `bge-small-en-v1.5`); no PyTorch and no per-token cost.
+* **trafilatura + selectolax** — main-content extraction and HTML parsing for the site crawler.
+* **boto3** — S3-compatible object storage for encrypted backups (AWS S3, Oracle, R2, MinIO).
+* **cryptography (Fernet)** — per-tenant integration credentials encrypted at rest.
+* **structlog** — JSON logging with PII redaction.
+* **pytest + pytest-asyncio** — 105 offline tests.
+* **ruff** — linting and formatting.
+* **Docker Compose + Caddy** — local stack and production reverse proxy with automatic TLS.
 
----
+## Versioning
 
-## Stack
+Python 3.12.13
 
-| Layer | Choice |
-|---|---|
-| Agent orchestration | **LangGraph** — typed state with reducers, parallel fan-out, conditional routing |
-| LLM abstraction | **LangChain** (`langchain-core`, `langchain-openai`) |
-| Model gateway | **OpenRouter** — per-tenant model choice, provider fallback, prompt caching |
-| **Evaluation** | **Custom harness** (`app/evals`) — LLM-judge graph, golden datasets and runs in Postgres, CI gate |
-| Embeddings | **fastembed** (ONNX) + Hugging Face `bge-small-en-v1.5` — local, $0/token, no PyTorch |
-| API | **FastAPI** + Uvicorn, Pydantic v2 |
-| Data | **PostgreSQL + pgvector** (HNSW), SQLAlchemy 2.0 async, Alembic |
-| Storage | **boto3** → S3-compatible (AWS S3 / Oracle / R2 / MinIO) |
-| Frontend | Vanilla **TypeScript** + Shadow DOM widget (8 KB), zero-build ops console |
-| Infra | Docker Compose · Caddy · GitHub Actions |
-| Quality | pytest · ruff · mypy |
+PostgreSQL 16 with pgvector (`pgvector/pgvector:pg16`)
 
-One datastore does vectors, queue and relational. **No Redis, no Celery, no hosted vector
-database** — Postgres holds all three until there is evidence it cannot.
+Docker Compose v2
 
-The eval harness is deliberately custom rather than `ragas`. The metric that matters most
-here — *prohibition safety*, did the agent do something this tenant contractually promised
-it would never do — is not a generic RAG metric, and the judge has to grade against a
-per-tenant rule list. It is ~340 lines and depends on nothing beyond what the app already
-uses.
+Node.js 24 (widget build only)
 
----
-
-## Testing
-
-**105 tests, no network, no cloud account.** Third-party integrations are exercised
-against local fakes that speak the real wire protocol — including the failures that matter:
-
-- Google returns **HTTP 200 with a per-calendar `errors` array** on a bad calendar id.
-  Reading that as "no busy periods" silently double-books the entire day.
-- Twilio signature validation is asserted against **Twilio's own published test vector**,
-  not against my implementation.
-- Retention is proven on real data: transcripts deleted, leads preserved, second run a
-  no-op.
-
-```bash
-./run.sh                      # postgres + schema + demo tenant + server
-pytest -q                     # 105 tests, offline
-python -m app.evals.runner <tenant>   # the release gate
-```
-
----
+Models: `claude-haiku-4.5` (answer) · `gemini-2.5-flash-lite` (guards) · `claude-sonnet-5` (escalation) · `claude-opus-5` (eval judge)
 
 ## Not built
 
-Voice (telephony + STT + TTS is its own project). Named CRM connectors — the signed
-HMAC webhook covers Zapier / n8n / Make / Power Automate today. Calendly.
+Voice (telephony + STT + TTS is its own project). Named CRM connectors — the signed HMAC
+webhook covers Zapier / n8n / Make / Power Automate today. Calendly.
 
 ## Before a client goes live
 
 1. Set `ADMIN_API_KEY` — the default ships as a placeholder.
-2. Set `allowed_origins` — empty means any site can use that bot on your credits.
+2. Set `allowed_origins` — empty means any website can use that bot on your credits.
 3. `ENV=production` — tools are mocked in dev, so nothing reaches a real system.
-4. WhatsApp needs Meta verification and US SMS needs 10DLC registration. Both take weeks.
+4. WhatsApp needs Meta Business verification and US SMS needs 10DLC registration.
+   Both take weeks; start them in parallel with the build.
+
+## Author
+
+* **Chetan Kushwah**
