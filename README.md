@@ -1,4 +1,4 @@
-![Tests](https://img.shields.io/badge/Tests-105%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-119%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-agent%20runtime-orange)
 ![Postgres](https://img.shields.io/badge/Postgres-pgvector-informational)
@@ -207,6 +207,39 @@ characters on voice — from one config, with identical guardrails.
 - **Everything that spends is bounded.** Per-tenant token budgets, three-tier rate
   limiting, capped batch loops, and terminal job states a sweep can never resurrect.
 
+### Retrieval is hybrid, then reranked
+
+Vector search alone is blind to exact tokens. Embed "brake pads for a 2019 Corolla" and
+the part number in the corpus blurs into "car maintenance". So every query runs two
+legs against the same tenant-scoped rows and merges them:
+
+```
+query ──► dense  (pgvector cosine, HNSW)     ──► top 20 ─┐
+      └─► sparse (tsvector + GIN, websearch)  ──► top 20 ─┴─► RRF ──► cross-encoder ──► top 6
+```
+
+- **Fusion is by rank, not score.** Cosine and `ts_rank` are on different scales; adding
+  them is meaningless. Reciprocal Rank Fusion uses only each chunk's position in each
+  list, so a chunk found by *both* legs wins. `app/rag/fusion.py` is 15 lines and tested
+  against the arithmetic, not just the happy path.
+- **The reranker gets the final say.** The bi-encoder that indexed the corpus scores
+  query and chunk separately, which is what makes it cheap and what makes it wrong. A
+  cross-encoder reads the pair together and is far better at "does this actually answer
+  it?", but only runs over the 20 candidates fusion narrowed to. Local ONNX via fastembed,
+  like the embedder. On the demo corpus it moved the top hit off a marketing paragraph and
+  onto the chunk that answers the question in two of three test queries.
+- **`tsv` is a GENERATED column.** There is no code path that can update `content` and
+  forget the index. The column cannot drift because nothing writes it.
+- **The tenant predicate is inside both SQL legs.** Filtering after an ANN search is how
+  small tenants retrieve nothing; filtering after a sparse search is how one tenant reads
+  another's documents. `tests/test_retriever.py` asserts the predicate is present in
+  every statement executed.
+- **Each hit records `via`: `dense`, `sparse`, or `both`.** When a retrieval looks wrong,
+  that field is the first thing to read.
+
+Both legs and the reranker are switches in `RetrievalCfg`, so a tenant can be dense-only
+if 150ms matters more than recall.
+
 ### Evaluation as a release gate
 
 `app/evals` is a self-contained harness: a golden dataset per tenant, an LLM-judge graph,
@@ -228,7 +261,7 @@ becomes a measurement:
 |---|---|
 | Blocked turn | **~1.1s** — `guard_in` short-circuits; no retrieval, no answer model |
 | Normal turn | **~2.9–3.6s** |
-| Retrieval | 5ms, concurrent with the guard |
+| Retrieval | dense-only **5ms**; hybrid + rerank **~150ms** (cross-encoder on CPU over 20 candidates), concurrent with the guard |
 | Cost per conversation | **~$0.004** |
 | Widget | 8 KB, Shadow DOM, zero framework |
 

@@ -19,9 +19,11 @@ log = get_logger("main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.rag.embed import warmup
+    from app.rag.rerank import warmup as warmup_reranker
 
     try:
         warmup()  # load the ONNX model before the first request pays for it
+        warmup_reranker()
         log.info("embedder_ready", model=get_settings().embedding_model)
     except Exception as exc:
         log.warning("embedder_warmup_failed", error=str(exc))

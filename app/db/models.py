@@ -6,6 +6,7 @@ from datetime import datetime
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    Computed,
     DateTime,
     Float,
     ForeignKey,
@@ -16,7 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app.settings import get_settings
@@ -119,6 +120,13 @@ class Chunk(Base):
     content: Mapped[str] = mapped_column(Text)
     source_url: Mapped[str] = mapped_column(Text, default="")
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBED_DIM))
+    # Sparse leg of hybrid search. GENERATED means it can never drift from `content`:
+    # there is no code path that updates one and forgets the other.
+    tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', content)", persisted=True),
+        nullable=True,
+    )
 
     # ANN + tenant filter interact badly at scale. This partial-friendly composite index
     # keeps the tenant predicate cheap; per-tenant partitioning is the next step past ~100k rows.
@@ -131,6 +139,7 @@ class Chunk(Base):
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
         Index("ix_chunks_tenant_doc", "tenant_id", "document_id"),
+        Index("ix_chunks_tsv_gin", "tsv", postgresql_using="gin"),
     )
 
 

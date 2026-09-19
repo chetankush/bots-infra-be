@@ -128,6 +128,15 @@ class RetrievalCfg(BaseModel):
     min_score: float = 0.25
     max_context_chars: int = 6000
 
+    # Hybrid retrieval. Dense embeddings catch paraphrase; Postgres full-text catches the
+    # exact tokens embeddings blur: product codes, part numbers, names. Both legs run
+    # tenant-scoped, are fused by rank (RRF), then a cross-encoder reorders the top
+    # candidates before top_k is cut.
+    hybrid: bool = True
+    rerank: bool = True
+    candidates: int = 20  # per leg, and the rerank window
+    rrf_k: int = 60  # damping constant from Cormack et al. (2009)
+
 
 class AgentConfig(BaseModel):
     """The fully-resolved config the graph executes against."""

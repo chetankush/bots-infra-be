@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     log_level: str = "info"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dim: int = 384
+    rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
     max_graph_iterations: int = 6
 
     # The public URL Twilio signs against. Behind a proxy the app cannot derive it,
