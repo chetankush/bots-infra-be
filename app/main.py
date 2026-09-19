@@ -28,6 +28,9 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("embedder_warmup_failed", error=str(exc))
     yield
+    from app.observability import flush
+
+    flush()  # ship any buffered traces before the process exits
     await engine.dispose()
 
 

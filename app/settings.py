@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +27,20 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dim: int = 384
     rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+
+    # Which OpenAI-compatible endpoint the graph talks to. "openrouter" is the default
+    # (one key, one invoice, per-tenant model choice). "ollama" points the same client
+    # at a local model server: $0 per token, no data leaves the box, and the answer to
+    # "is the cheap local model good enough for this client?" becomes an eval run.
+    llm_provider: Literal["openrouter", "ollama"] = "openrouter"
+    ollama_base_url: str = "http://localhost:11434/v1"
+
+    # Langfuse tracing. Project-prefixed names on purpose, same reasoning as the
+    # OpenRouter key above: a bare LANGFUSE_* in a shell profile must not silently
+    # ship a client's transcripts to whatever project it happens to belong to.
+    langfuse_public_key: str = Field("", alias="FV_LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str = Field("", alias="FV_LANGFUSE_SECRET_KEY")
+    langfuse_host: str = Field("https://cloud.langfuse.com", alias="FV_LANGFUSE_HOST")
     max_graph_iterations: int = 6
 
     # The public URL Twilio signs against. Behind a proxy the app cannot derive it,

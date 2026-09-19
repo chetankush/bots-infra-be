@@ -1,7 +1,8 @@
 """The single seam between the graph and any model provider.
 
-Everything goes through OpenRouter (one key, one invoice, per-tenant model choice).
-Swapping to a direct provider later is a change in this file, not across the graph.
+Two providers, one client class: OpenRouter (hosted; one key, one invoice, per-tenant
+model choice) or Ollama (local; $0 per token, nothing leaves the box). Which one is a
+setting, and the graph never knows. Adding a third is a branch in this file.
 """
 
 from functools import lru_cache
@@ -20,6 +21,23 @@ def _client(
     model: str, temperature: float, max_tokens: int, streaming: bool, fallbacks: tuple[str, ...]
 ) -> ChatOpenAI:
     s = get_settings()
+
+    if s.llm_provider == "ollama":
+        # Same ChatOpenAI client, different base_url. Ollama speaks the OpenAI API but
+        # ignores OpenRouter's `models` fallback field and has no prompt cache, so
+        # neither is sent. The model name comes from the tenant's ModelPolicy as
+        # usual - e.g. "llama3.2" or "phi3" - so switching a tenant to local is a row.
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            streaming=streaming,
+            api_key="ollama",  # the SDK requires a non-empty key; Ollama ignores it
+            base_url=s.ollama_base_url,
+            timeout=120,  # local inference on CPU is slower than a hosted GPU
+            max_retries=1,
+        )
+
     if not s.openrouter_api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
     return ChatOpenAI(

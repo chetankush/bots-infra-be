@@ -27,13 +27,14 @@ dependencies = [
     "structlog>=24.4",
     "python-multipart>=0.0.12",
     "boto3>=1.35",
+    "langfuse>=3.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "pytest-cov>=5.0", "ruff>=0.8", "mypy>=1.13"]
 # The eval harness is self-contained (app/evals) - it needs no extra packages.
-# ragas and langfuse were declared here and imported nowhere; a dependency you do
-# not use is a claim you cannot defend.
+# ragas was declared here once and imported nowhere; a dependency you do not use is
+# a claim you cannot defend. langfuse is back only because app/observability.py uses it.
 
 [tool.ruff]
 line-length = 100

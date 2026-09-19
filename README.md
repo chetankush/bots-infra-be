@@ -1,4 +1,4 @@
-![Tests](https://img.shields.io/badge/Tests-119%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-127%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-agent%20runtime-orange)
 ![Postgres](https://img.shields.io/badge/Postgres-pgvector-informational)
@@ -240,6 +240,27 @@ query ──► dense  (pgvector cosine, HNSW)     ──► top 20 ─┐
 Both legs and the reranker are switches in `RetrievalCfg`, so a tenant can be dense-only
 if 150ms matters more than recall.
 
+### The model is a setting, and so is where it runs
+
+`LLM_PROVIDER=ollama` points the same `ChatOpenAI` client at a local server. Nothing in
+the graph changes. Combined with the eval gate this turns "can this client run on a free
+local model?" into a measurement rather than an opinion: switch the tenant's
+`ModelPolicy` to `llama3.2`, replay its golden set, read the scorecard.
+
+### One trace per turn
+
+With `FV_LANGFUSE_*` set, every turn opens one Langfuse observation carrying tenant,
+channel, conversation, answer model, the graph's node trace, token usage, latency, and
+whether the guard blocked it. Blocked turns are logged at `WARNING` so they stand out
+in the dashboard. Eval replays are tagged `eval` so they never pollute production
+numbers. Without keys the whole module is a no-op, and a failing tracer degrades to
+no-op rather than failing the turn.
+
+This is deliberately *not* the LangChain callback integration. That handler imports the
+full `langchain` package, which moves `langchain-core` across a major version and drags
+`langgraph` with it. A turn-level observation is two function calls and keeps the graph
+free of any tracing framework.
+
 ### Evaluation as a release gate
 
 `app/evals` is a self-contained harness: a golden dataset per tenant, an LLM-judge graph,
@@ -273,12 +294,14 @@ becomes a measurement:
 * **FastAPI** — async API layer, with SSE for streaming responses.
 * **PostgreSQL + pgvector** — one datastore for vectors, job queue and relational data. No Redis, no Celery, no hosted vector database.
 * **SQLAlchemy 2.0 (async) + Alembic** — ORM and migrations.
-* **fastembed** — local ONNX embeddings (Hugging Face `bge-small-en-v1.5`); no PyTorch and no per-token cost.
+* **fastembed** — local ONNX embeddings (`bge-small-en-v1.5`) and cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`); no PyTorch and no per-token cost.
+* **Ollama** (optional) — local model serving behind the same client; a setting, not a code path.
+* **Langfuse** (optional) — one trace per turn with tenant, model, tokens, latency and the graph's node path. No-op without keys.
 * **trafilatura + selectolax** — main-content extraction and HTML parsing for the site crawler.
 * **boto3** — S3-compatible object storage for encrypted backups (AWS S3, Oracle, R2, MinIO).
 * **cryptography (Fernet)** — per-tenant integration credentials encrypted at rest.
 * **structlog** — JSON logging with PII redaction.
-* **pytest + pytest-asyncio** — 105 offline tests.
+* **pytest + pytest-asyncio** — 127 offline tests.
 * **ruff** — linting and formatting.
 * **Docker Compose + Caddy** — local stack and production reverse proxy with automatic TLS.
 

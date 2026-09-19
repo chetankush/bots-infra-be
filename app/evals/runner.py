@@ -12,11 +12,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import subprocess
+import time
 import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import select
 
+from app import observability
 from app.config.packs import PACKS
 from app.config.resolver import resolve
 from app.config.schema import AgentConfig
@@ -70,7 +72,29 @@ async def _run_case(graph, cfg: AgentConfig, tenant_id, conversation_id, questio
         "trace": [],
         "usage": {"input": 0, "output": 0},
     }
+    span = observability.start_turn(
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        channel="eval",
+        model=cfg.models.answer,
+        text=question,
+        tags=["eval"],
+    )
+    started = time.perf_counter()
     final = await graph.ainvoke(state)
+    observability.end_turn(
+        span,
+        reply=next(
+            (
+                str(m.content)
+                for m in reversed(final.get("messages", []))
+                if isinstance(m, AIMessage)
+            ),
+            "",
+        ),
+        final=final,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+    )
     for message in reversed(final.get("messages", [])):
         if isinstance(message, AIMessage) and str(message.content).strip():
             return str(message.content)

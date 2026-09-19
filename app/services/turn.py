@@ -14,6 +14,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app import observability
 from app.db.models import Conversation, Message, Tenant
 from app.db.session import session_scope
 from app.logging import get_logger
@@ -34,6 +35,7 @@ class TurnContext:
     intake: dict = field(default_factory=dict)
     stream_tokens: bool = False
     locale: str = "en"
+    span: Any = field(default=None, repr=False)
 
 
 async def open_turn(
@@ -102,6 +104,13 @@ async def open_turn(
             intake=dict(conversation.intake or {}),
             stream_tokens=resolved.config.channel.stream_before_guard,
             locale=locale_resolved,
+            span=observability.start_turn(
+                tenant_id=resolved.tenant_id,
+                conversation_id=conversation.id,
+                channel=channel,
+                model=resolved.config.models.answer,
+                text=text,
+            ),
         )
 
 
@@ -133,6 +142,7 @@ async def close_turn(ctx: TurnContext, final: dict, *, reply: str, started: floa
     """Persist the reply, roll up usage, and return the client payload."""
     usage = final.get("usage") or {"input": 0, "output": 0}
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    observability.end_turn(ctx.span, reply=reply, final=final, latency_ms=elapsed_ms)
 
     async with session_scope() as session:
         session.add(
