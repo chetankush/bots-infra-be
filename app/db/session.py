@@ -13,6 +13,12 @@ engine = create_async_engine(
     max_overflow=20,
     pool_pre_ping=True,
     echo=False,
+    # Hosted Postgres usually sits behind PgBouncer (Supabase, Neon, RDS Proxy). In
+    # transaction-pooling mode a server-side prepared statement can be routed to a
+    # different backend on the next query and fail with "prepared statement does not
+    # exist". Disabling asyncpg's statement cache makes the app safe behind any pooler
+    # at a small per-query cost; a direct or session-mode connection is unaffected.
+    connect_args={"statement_cache_size": 0},
 )
 
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
